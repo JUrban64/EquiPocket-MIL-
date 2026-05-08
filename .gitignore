@@ -1,0 +1,22 @@
+# 1. Velká data a struktury
+Binding_Sites/
+structures/
+p2rank_2.5.1/
+gt_graph_batches/
+p2rank_graph_batches/
+
+# 2. Vygenerované datasety (JSON)
+*.json
+
+# 3. PyTorch Modely a Embeddingy (velké soubory)
+*.pt
+
+# 4. Logy a reporty
+*.log
+report*
+
+# 5. Dočasné soubory Pythonu a macOS
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
