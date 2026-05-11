@@ -78,7 +78,7 @@ def compute_macro_f1(y_true, y_pred):
     return float(f1_score(y_true, y_pred, average='macro', zero_division=0))
 
 
-def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device):
+def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device, val_ids=None):
     """Evaluate loss and AP over serialized graph batches using DataLoaders."""
     model.eval()
     total_loss = 0.0
@@ -88,6 +88,8 @@ def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device)
 
     with torch.no_grad():
         for batch_file, graphs in iter_graph_batches_from_paths(batch_paths):
+            if val_ids is not None:
+                graphs = [g for g in graphs if getattr(g, 'protein_id', getattr(g, 'pdb_id', getattr(g, 'pocket_id', ''))).split('_pocket_')[0].replace('.pdb', '').replace('_prank_output', '') in val_ids]
             if not graphs:
                 continue
 
@@ -132,6 +134,13 @@ class EarlyStopping:
         return self.counter >= self.patience
 
 
+def load_split_ids_e3():
+    train_ids, val_ids = set(), set()
+    if os.path.exists('train_e3.txt'):
+        train_ids = set(open('train_e3.txt').read().splitlines())
+    if os.path.exists('validation_e3.txt'):
+        val_ids = set(open('validation_e3.txt').read().splitlines())
+    return train_ids, val_ids
 
 def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
                         hidden_dim=256, num_heads=4, dropout=0.5,
@@ -171,7 +180,14 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
     logging.info(f"Loaded manifest with {len(all_batch_paths)} graph-batch files")
     logging.info(f"Manifest expected graphs: {manifest.get('num_graphs', 'unknown')}")
 
-    if val_manifest_path:
+    train_ids, val_ids = load_split_ids_e3()
+    filter_by_id = len(train_ids) > 0 and len(val_ids) > 0
+
+    if filter_by_id:
+        logging.info("Using explicit splits from structure_clustering (train_e3.txt, validation_e3.txt)")
+        train_batch_paths = all_batch_paths
+        val_batch_paths = all_batch_paths
+    elif val_manifest_path:
         _, val_batch_paths = load_manifest(val_manifest_path)
         train_batch_paths = all_batch_paths
         logging.info(f"Validation manifest loaded with {len(val_batch_paths)} graph-batch files")
@@ -214,6 +230,8 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
         all_train_preds = []
 
         for batch_file, graphs in iter_graph_batches_from_paths(train_batch_paths):
+            if filter_by_id:
+                graphs = [g for g in graphs if getattr(g, 'protein_id', getattr(g, 'pdb_id', getattr(g, 'pocket_id', ''))).split('_pocket_')[0].replace('.pdb', '').replace('_prank_output', '') in train_ids]
             if not graphs:
                 continue
 
@@ -256,6 +274,7 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
                 criterion=criterion,
                 batch_size=batch_size,
                 device=device,
+                val_ids=val_ids if filter_by_id else None
             )
 
         logging.info(

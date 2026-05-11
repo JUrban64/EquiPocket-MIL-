@@ -13,11 +13,16 @@ def create_alias_pdb(src_pdb, dst_pdb):
     """Vytvoří fyzickou kopii (symlinky mohou dělat problémy na HPC/v kontejnerech)."""
     shutil.copy2(src_pdb, dst_pdb)
 
-def cluster_structures(test_limit=None):
-    pdb_roots = [
-        os.path.join(script_dir, 'Binding_Sites', 'PDB'),
-        os.path.join(script_dir, 'structures')
-    ]
+def cluster_structures(target='both', test_limit=None):
+    if target == 'binding_sites':
+        pdb_roots = [os.path.join(script_dir, 'Binding_Sites', 'PDB')]
+    elif target == 'structures':
+        pdb_roots = [os.path.join(script_dir, 'structures')]
+    else:
+        pdb_roots = [
+            os.path.join(script_dir, 'Binding_Sites', 'PDB'),
+            os.path.join(script_dir, 'structures')
+        ]
     
     pdb_files = []
     for root in pdb_roots:
@@ -161,13 +166,15 @@ if __name__ == "__main__":
     # Nastavení argparse
     parser = argparse.ArgumentParser(description="Cluster PDB structures using Foldseek.")
     parser.add_argument("--test", action="store_true", help="Omezí počet PDB souborů na 30 pro rychlé testování.")
+    parser.add_argument("--target", choices=["binding_sites", "structures", "both"], default="both", 
+                        help="Co se má clustrovat: 'binding_sites' pro trénink E3, 'structures' pro MIL klasifikátor, nebo 'both'.")
     args = parser.parse_args()
 
     # Určení limitu na základě argumentu
     limit = 30 if args.test else None
 
-    # Předání limitu do funkce
-    train, validation, test = cluster_structures(test_limit=limit)
+    # Předání limitu a cíle do funkce
+    train, validation, test = cluster_structures(target=args.target, test_limit=limit)
 
     if train is not None:
         with open(os.path.join(script_dir, 'train.txt'), 'w') as f:
