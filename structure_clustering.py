@@ -20,7 +20,7 @@ def cluster_structures(target='both', test_limit=None):
         pdb_roots = [os.path.join(script_dir, 'structures')]
     else:
         pdb_roots = [
-            os.path.join(script_dir, 'Binding_Sites', 'PDB'),
+            os.path.join(script_dir, 'Binding_Sites'),
             os.path.join(script_dir, 'structures')
         ]
     

@@ -580,7 +580,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description="Extract binding sites from PDB files.")
-    parser.add_argument('--pdb-root', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'PDB'),
+    parser.add_argument('--pdb-root', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Binding_Sites'),
                         help='Root directory for PDB files.')
     parser.add_argument('--split-file', default=None,
                         help='Optional path to text file containing protein IDs to process (e.g. train.txt).')

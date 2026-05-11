@@ -465,7 +465,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--output-dir',
-        default='binding_site_graph_batches',
+        default='gt_graph_batches',
         help='Output directory for serialized graph batches'
     )
     parser.add_argument(
