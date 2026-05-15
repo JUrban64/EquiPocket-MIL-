@@ -15,7 +15,7 @@ def create_alias_pdb(src_pdb, dst_pdb):
 
 def cluster_structures(target='both', test_limit=None):
     if target == 'binding_sites':
-        pdb_roots = [os.path.join(script_dir, 'Binding_Sites', 'PDB')]
+        pdb_roots = [os.path.join(script_dir, 'Binding_Sites')]
     elif target == 'structures':
         pdb_roots = [os.path.join(script_dir, 'structures')]
     else:
