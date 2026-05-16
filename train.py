@@ -183,14 +183,17 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
     train_ids, val_ids = load_split_ids_e3()
     filter_by_id = len(train_ids) > 0 and len(val_ids) > 0
 
-    if filter_by_id:
+    if val_manifest_path:
+        # Použití oddělených manifestů (prioritní způsob)
+        _, val_batch_paths = load_manifest(val_manifest_path)
+        train_batch_paths = all_batch_paths
+        filter_by_id = False  # Vypneme další filtrování, grafy už jsou filtrované uvnitř manifestů
+        logging.info(f"Validation manifest loaded with {len(val_batch_paths)} graph-batch files")
+    elif filter_by_id:
+        # Původní fallback: jeden manifest a filtrování pomocí txt souborů za běhu
         logging.info("Using explicit splits from structure_clustering (train_e3.txt, validation_e3.txt)")
         train_batch_paths = all_batch_paths
         val_batch_paths = all_batch_paths
-    elif val_manifest_path:
-        _, val_batch_paths = load_manifest(val_manifest_path)
-        train_batch_paths = all_batch_paths
-        logging.info(f"Validation manifest loaded with {len(val_batch_paths)} graph-batch files")
     else:
         train_batch_paths, val_batch_paths = split_batch_files(
             all_batch_paths,

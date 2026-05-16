@@ -131,11 +131,11 @@ def train_and_evaluate(bags, epochs=50, lr=1e-3):
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     
     logging.info("\\n--- Trénink MIL sítě ---")
-    best_loss = float('inf')
+    best_val_loss = float('inf')
     
     for epoch in range(epochs):
         model.train()
-        total_loss = 0
+        total_train_loss = 0
         np.random.shuffle(train_bags)
         
         for bag in train_bags:
@@ -144,17 +144,29 @@ def train_and_evaluate(bags, epochs=50, lr=1e-3):
             loss = criterion(logits, bag['label'])
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            total_train_loss += loss.item()
             
-        avg_loss = total_loss/len(train_bags)
+        avg_train_loss = total_train_loss / len(train_bags)
         
-        # Uložení nejlepšího modelu
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        # --- Validace ---
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for bag in val_bags:
+                logits, A = model(bag['features'])
+                val_loss = criterion(logits, bag['label'])
+                total_val_loss += val_loss.item()
+                
+        # Zabráníme dělení nulou, pokud by náhodou validační sada byla prázdná
+        avg_val_loss = total_val_loss / len(val_bags) if len(val_bags) > 0 else avg_train_loss
+        
+        # Uložení nejlepšího modelu podle validační ztráty
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
             torch.save(model.state_dict(), "mil_model_best.pt")
             
         if (epoch + 1) % 10 == 0:
-            logging.info(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | Best Loss: {best_loss:.4f}")
+            logging.info(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Best Val: {best_val_loss:.4f}")
             
     # Načtení nejlepšího modelu pro vyhodnocení
     logging.info("\\nNačítám nejlepší model pro vyhodnocení...")

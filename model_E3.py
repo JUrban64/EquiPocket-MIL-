@@ -40,13 +40,14 @@ class GNNBranchE3(nn.Module):
 
     def forward(self, batch):
         # 1. Projekce původních ESM features
-        # Z PyG batche si vytáhneme node features 'x' a edge_index
         x_feats = self.protein_projection(batch.x)
         
-        # 2. Iterace přes vrstvy EGNN
-        # EGNN_Sparse od lucidrains očekává jeden tenzor x_in, kde 
-        # první dimenze jsou souřadnice (pos) a zbytek jsou features.
+        # 2. Centrování souřadnic (ZABRÁNÍ EXPLOZI LOSS A NAN HODNOTÁM)
         coors = batch.pos
+        # Spočítáme těžiště pro každý graf v batchi a odečteme ho
+        mean_coors = global_mean_pool(coors, batch.batch)
+        coors = coors - mean_coors[batch.batch]
+        
         feats = x_feats
         
         for layer in self.gnn_layers:
@@ -90,6 +91,7 @@ class GraphClassifierE3(nn.Module):
         # Predikční hlava
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, num_classes)
