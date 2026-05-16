@@ -78,12 +78,12 @@ def load_data_and_group(embeddings_path):
 
 def load_split_ids():
     train_ids, val_ids, test_ids = set(), set(), set()
-    if os.path.exists('train.txt'):
-        train_ids = set(open('train.txt').read().splitlines())
-    if os.path.exists('validation.txt'):
-        val_ids = set(open('validation.txt').read().splitlines())
-    if os.path.exists('test.txt'):
-        test_ids = set(open('test.txt').read().splitlines())
+    if os.path.exists('train_mil.txt'):
+        train_ids = set(open('train_mil.txt').read().splitlines())
+    if os.path.exists('validation_mil.txt'):
+        val_ids = set(open('validation_mil.txt').read().splitlines())
+    if os.path.exists('test_mil.txt'):
+        test_ids = set(open('test_mil.txt').read().splitlines())
     return train_ids, val_ids, test_ids
 
 def train_and_evaluate(bags, epochs=50, lr=1e-3):
@@ -131,6 +131,8 @@ def train_and_evaluate(bags, epochs=50, lr=1e-3):
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     
     logging.info("\\n--- Trénink MIL sítě ---")
+    best_loss = float('inf')
+    
     for epoch in range(epochs):
         model.train()
         total_loss = 0
@@ -144,9 +146,21 @@ def train_and_evaluate(bags, epochs=50, lr=1e-3):
             optimizer.step()
             total_loss += loss.item()
             
-        if (epoch + 1) % 10 == 0:
-            logging.info(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(train_bags):.4f}")
+        avg_loss = total_loss/len(train_bags)
+        
+        # Uložení nejlepšího modelu
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), "mil_model_best.pt")
             
+        if (epoch + 1) % 10 == 0:
+            logging.info(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | Best Loss: {best_loss:.4f}")
+            
+    # Načtení nejlepšího modelu pro vyhodnocení
+    logging.info("\\nNačítám nejlepší model pro vyhodnocení...")
+    if os.path.exists("mil_model_best.pt"):
+        model.load_state_dict(torch.load("mil_model_best.pt"))
+        
     # Vyhodnocení
     model.eval()
     y_true, y_pred, y_probs = [], [], []

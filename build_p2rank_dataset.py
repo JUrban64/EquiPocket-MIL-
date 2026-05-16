@@ -52,27 +52,18 @@ def compute_contact_map(ca_coords, threshold=8.0):
     contact_map = (dist_matrix < threshold).astype(float)
     return contact_map.tolist()
 
-def process_p2rank_pockets(pockets_dir, gt_json_path, output_json, overlap_threshold=0.3):
+def process_p2rank_pockets(pockets_dir, output_json):
     """
-    Načte PDB soubory kapes z p2ranku a převede je do JSON formátu pro EGNN grafy.
-    Labeling: Zjistí překryv s Ground Truth residui.
+    Načte PDB soubory kapes z p2ranku a převede je do JSON formátu pro EGNN/MIL grafy.
+    Získá globální (bag-level) label z názvu nadřazené složky (např. NAD, FAD).
     """
-    print(f"Loading Ground Truth from {gt_json_path}...")
-    with open(gt_json_path, 'r', encoding='utf-8') as f:
-        gt_data = json.load(f)
+    try:
+        from Binding_site_ex import COFACTOR_FUNCTIONAL_GROUPS
+        supported_cofactors = list(COFACTOR_FUNCTIONAL_GROUPS.keys())
+    except ImportError:
+        # Fallback if Binding_site_ex isn't accessible
+        supported_cofactors = ['NAD', 'FAD', 'ATP', 'ADP', 'COA']
         
-    # Připravíme si GT lookup table pro rychlé hledání
-    gt_lookup = {}
-    for prot_id, info in gt_data.items():
-        gt_res = set()
-        for r in info.get('binding_site_residues', []):
-            gt_res.add((r['chain_id'], r['resseq']))
-        gt_lookup[prot_id] = {
-            'residues': gt_res,
-            'label': info.get('label', -1),
-            'full_sequence': info.get('full_sequence', '')
-        }
-    
     pocket_files = glob.glob(os.path.join(pockets_dir, '**', '*_pocket_*.pdb'), recursive=True)
     print(f"Found {len(pocket_files)} p2rank pocket PDB files.")
     
@@ -80,7 +71,7 @@ def process_p2rank_pockets(pockets_dir, gt_json_path, output_json, overlap_thres
     p2rank_dataset = []
     
     for pfile in tqdm.tqdm(pocket_files):
-        # Extrakce protein ID z názvu souboru (předpoklad: protID_pocket_X.pdb)
+        # Extrakce protein ID a složky
         basename = os.path.basename(pfile)
         prot_id = basename.split('_pocket_')[0]
         
@@ -88,10 +79,19 @@ def process_p2rank_pockets(pockets_dir, gt_json_path, output_json, overlap_thres
         if prot_id.endswith('_prank_output'):
             prot_id = prot_id.replace('_prank_output', '')
             
-        if prot_id not in gt_lookup:
+        # Zjištění labelu z cesty
+        path_parts = Path(pfile).parts
+        cofactor_name = None
+        for cof in supported_cofactors:
+            if cof in path_parts:
+                cofactor_name = cof
+                break
+                
+        if cofactor_name is None:
+            # Přeskočíme, pokud nevíme, jaká je to třída
             continue
             
-        gt_info = gt_lookup[prot_id]
+        label_idx = supported_cofactors.index(cofactor_name)
         
         try:
             structure = parser.get_structure('pocket', pfile)
@@ -102,36 +102,20 @@ def process_p2rank_pockets(pockets_dir, gt_json_path, output_json, overlap_thres
                 
             contact_map = compute_contact_map(ca_coords)
             
-            # Výpočet překryvu (Intersection over Union)
-            intersection = pocket_res_ids.intersection(gt_info['residues'])
-            if len(pocket_res_ids) == 0:
-                continue
-                
-            # Můžeme počítat overlap vůči velikosti kapsy, nebo vůči sjednocení
-            overlap_ratio = len(intersection) / len(pocket_res_ids)
-            
-            # Label = 1 pokud je to správná kapsa (překryv > threshold), jinak 0
-            is_correct_pocket = 1 if overlap_ratio > overlap_threshold else 0
-            
             # Ukládáme jako dict do pole
             item = {
                 'pocket_id': basename,
                 'protein_id': prot_id,
-                'is_correct_pocket': is_correct_pocket, 
-                'gt_enzyme_class': gt_info['label'],    
-                'label': gt_info['label'],              
-                'overlap_ratio': overlap_ratio,
+                'label': label_idx,
+                'ligand_name': cofactor_name,
                 'binding_site_sequence': seq,
-                'full_sequence': gt_info['full_sequence'],
+                'full_sequence': seq,  # P2Rank kapsa je brána jako samostatná sekvence pro lokální ESM
                 'contact_map': contact_map,
                 'protein_coords': ca_coords,
                 'n_binding_site': len(seq),
-        
+                'binding_site_indices': list(range(len(seq))),
+                'pdb_file': pfile
             }
-            
-            item['full_sequence'] = seq
-            item['binding_site_indices'] = list(range(len(seq)))
-            item['pdb_file'] = pfile
             
             p2rank_dataset.append(item)
             
@@ -147,24 +131,11 @@ def process_p2rank_pockets(pockets_dir, gt_json_path, output_json, overlap_thres
 
 
 if __name__ == "__main__":
-    gt_json = "binding_sites_by_protein.json"
-    
-    if not os.path.exists(gt_json):
-        print(f"{gt_json} nenalezen. Spouštím extrakci Ground Truth přes Binding_site_ex.py...")
-        import subprocess
-        cmd = [
-            "python", "Binding_site_ex.py",
-            "--pdb-root", "Binding_Sites/PDB",
-            "--output-json", gt_json
-        ]
-        try:
-            subprocess.run(cmd, check=True)
-            print("Ground Truth extrakce úspěšně dokončena.")
-        except subprocess.CalledProcessError as e:
-            print(f"Chyba při generování Ground Truth: {e}")
-            exit(1)
-            
     pockets_dir = "./structures"
     output_json = "p2rank_pockets_dataset.json"
     
-    process_p2rank_pockets(pockets_dir, gt_json, output_json)
+    if not os.path.exists(pockets_dir):
+        print(f"Directory {pockets_dir} not found. Please run prank_predict.py first.")
+        exit(1)
+        
+    process_p2rank_pockets(pockets_dir, output_json)

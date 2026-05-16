@@ -177,14 +177,25 @@ if __name__ == "__main__":
     train, validation, test = cluster_structures(target=args.target, test_limit=limit)
 
     if train is not None:
-        with open(os.path.join(script_dir, 'train.txt'), 'w') as f:
+        # Určení sufixu podle cíle (target)
+        suffix = ""
+        if args.target == "binding_sites":
+            suffix = "_e3"
+        elif args.target == "structures":
+            suffix = "_mil"
+        elif args.target == "both":
+            suffix = "_both"
+
+        with open(os.path.join(script_dir, f'train{suffix}.txt'), 'w') as f:
             for item in train:
                 f.write(f"{item}\n")    
 
-        with open(os.path.join(script_dir, 'validation.txt'), 'w') as f:
+        with open(os.path.join(script_dir, f'validation{suffix}.txt'), 'w') as f:
             for item in validation:
                 f.write(f"{item}\n")
         
-        with open(os.path.join(script_dir, 'test.txt'), 'w') as f:
+        with open(os.path.join(script_dir, f'test{suffix}.txt'), 'w') as f:
             for item in test:
                 f.write(f"{item}\n")
+        
+        print(f"Soubory uloženy jako: train{suffix}.txt, validation{suffix}.txt, test{suffix}.txt")
