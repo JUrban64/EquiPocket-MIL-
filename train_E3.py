@@ -29,7 +29,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--num-heads', type=int, default=4)
     parser.add_argument('--dropout', type=float, default=0.5)
-    parser.add_argument('--num-classes', type=int, default=6)
+    parser.add_argument('--num-classes', type=int, default=5)
     parser.add_argument('--device', default=None)
     parser.add_argument(
         '--val-manifest',

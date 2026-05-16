@@ -31,7 +31,7 @@ class GNNBranchE3(nn.Module):
                     pos_dim=3,
                     m_dim=hidden_dim,
                     update_feats=True,
-                    update_coors=True,
+                    update_coors=False, # ZMĚNA: Zmrazíme atomy!
                     dropout=dropout
                 )
             )
@@ -75,7 +75,7 @@ class GraphClassifierE3(nn.Module):
     Classifier využívající EGNN_Sparse Encoder (lucidrains).
     Batch musí obsahovat atribut 'pos' s 3D koordidánatami jako float32.
     """
-    def __init__(self, node_dim=1280, hidden_dim=64, num_attention_heads=4, dropout=0.5, num_classes=2):
+    def __init__(self, node_dim=1280, hidden_dim=64, num_attention_heads=4, dropout=0.5, num_classes=5):
         super().__init__()
         
         # num_attention_heads ignorujeme (není nutné pro global_mean_pool),

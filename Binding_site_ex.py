@@ -35,18 +35,16 @@ COFACTOR_FUNCTIONAL_GROUPS = {
         'beta_P':        ['PB', 'O1B', 'O2B', 'O3B'],
         'gamma_P':       ['PG', 'O1G', 'O2G', 'O3G'],
     },
-    'ADP': {
-        'adenine':       ['C8', 'N9', 'C4', 'C5', 'N7', 'C2', 'N1', 'C6', 'N6', 'N3'],
-        'ribose':        ["C1'", "C2'", "O2'", "C3'", "O3'", "C4'", "O4'", "C5'"],
-        'alpha_P':       ['PA', 'O1A', 'O2A', 'O3A', 'O5B'],
-        'beta_P':        ['PB', 'O1B', 'O2B', 'O3B'],
-    },
-    'COA': {
+    'acetyl-CoA': {
         'adenine':       ['C8', 'N9', 'C4', 'C5', 'N7', 'C2', 'N1', 'C6', 'N6', 'N3'],
         'ribose':        ["C1'", "C2'", "O2'", "C3'", "O3'", "C4'", "O4'", "C5'"],
         'phosphate':     ['PA', 'O1A', 'O2A', 'P3A', 'O3A'],
         'pantothenate':  [],  # variable atom naming
         'cysteamine':    [],
+    },
+    'B12': {
+        # B12 je komplexní, pro účely GNN extrakce zde necháváme prázdný slovník,
+        # fallback na 'unknown' element embeddingy se o něj bezpečně postará.
     },
 }
 

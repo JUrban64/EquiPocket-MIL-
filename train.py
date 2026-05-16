@@ -221,7 +221,7 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
             f"min_epochs={early_stopping_min_epochs}"
         )
 
-    best_val_f1 = -float('inf')
+    best_val_loss_tracker = float('inf')
     best_epoch = None
 
     for epoch in range(1, epochs + 1):
@@ -247,6 +247,10 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
                 logits = model(pyg_batch)
                 loss = criterion(logits, y)
                 loss.backward()
+                
+                # Zabrání explozi gradientů a následným NaN hodnotám
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
 
                 preds = logits.detach().argmax(dim=1)
@@ -286,35 +290,36 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
             f"val_loss: {val_loss:.6f} - val_macroF1: {val_f1:.6f} - val_samples: {val_items}"
         )
 
-        if save_best_model_path and not np.isnan(val_f1) and val_f1 > best_val_f1:
-            best_val_f1 = val_f1
+        if save_best_model_path and not np.isnan(val_loss) and val_loss < best_val_loss_tracker:
+            best_val_loss_tracker = val_loss
             best_epoch = epoch
             torch.save(
                 {
                     'epoch': epoch,
+                    'val_loss': float(val_loss),
                     'val_f1': float(val_f1),
                     'model_state_dict': model.state_dict(),
                 },
                 save_best_model_path,
             )
             print(
-                f"  saved best checkpoint by val_macroF1={val_f1:.6f} "
+                f"  saved best checkpoint by val_loss={val_loss:.6f} "
                 f"to: {save_best_model_path}"
             )
 
         if use_early_stopping and epoch >= early_stopping_min_epochs and epoch_items > 0:
-            monitor_metric = val_f1 if not np.isnan(val_f1) else train_f1
+            # Monitorujeme Loss (čím nižší, tím lepší). Proto otočíme znaménko pro EarlyStopper
+            monitor_metric = -val_loss if not np.isnan(val_loss) else -avg_loss
             if np.isnan(monitor_metric):
-                print("  early-stopping skipped: F1 metric is NaN")
+                print("  early-stopping skipped: Loss metric is NaN")
                 continue
 
-            # Monitorujeme F1 (cim vyssi, tim lepsi).
             should_stop = early_stopper.step(monitor_metric)
-            best_metric = early_stopper.best_score
+            best_metric = -early_stopper.best_score
             wait = early_stopper.counter
             print(
                 "  early-stopping status: "
-                f"best_F1={best_metric:.6f}, "
+                f"best_loss={best_metric:.6f}, "
                 f"wait={wait}/{early_stopping_patience}"
             )
             if should_stop:
@@ -324,13 +329,13 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
     if save_best_model_path:
         if best_epoch is None:
             print(
-                "Best checkpoint was not saved because validation F1 was NaN "
+                "Best checkpoint was not saved because validation Loss was NaN "
                 "in all epochs."
             )
         else:
             print(
                 f"Best checkpoint summary: epoch={best_epoch}, "
-                f"val_macroF1={best_val_f1:.6f}, path={save_best_model_path}"
+                f"val_loss={best_val_loss_tracker:.6f}, path={save_best_model_path}"
             )
 
     return model

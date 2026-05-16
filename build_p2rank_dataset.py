@@ -62,7 +62,7 @@ def process_p2rank_pockets(pockets_dir, output_json):
         supported_cofactors = list(COFACTOR_FUNCTIONAL_GROUPS.keys())
     except ImportError:
         # Fallback if Binding_site_ex isn't accessible
-        supported_cofactors = ['NAD', 'FAD', 'ATP', 'ADP', 'COA']
+        supported_cofactors = ['acetyl-CoA', 'ATP', 'B12', 'FAD', 'NAD']
         
     pocket_files = glob.glob(os.path.join(pockets_dir, '**', '*_pocket_*.pdb'), recursive=True)
     print(f"Found {len(pocket_files)} p2rank pocket PDB files.")
