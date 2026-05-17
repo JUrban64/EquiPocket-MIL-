@@ -4,17 +4,13 @@ from torch_geometric.nn import global_mean_pool
 from egnn_pytorch import EGNN_Sparse
 
 class GNNBranchE3(nn.Module):
-    """
-    E(n)-Equivariant GNN využívající egnn-pytorch (lucidrains).
-    Tento model zachovává rotační a translační symetrie pro 3D souřadnice.
-    """
     def __init__(self, node_dim=1280, hidden_dim=64, num_gnn_layers=3, dropout=0.5):
         super().__init__()
         
         self.hidden_dim = hidden_dim
         self.node_dim = node_dim
         
-        # Lineární projekce původních vlastností uzlů (např. ESM)
+        # Lineární projekce původních vlastností uzlů (ESM)
         self.protein_projection = nn.Sequential(
             nn.Linear(node_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -22,7 +18,7 @@ class GNNBranchE3(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Samotné EGNN Sparse vrstvy.
+        # Čisté EGNN Sparse vrstvy bez edge_attr
         self.gnn_layers = nn.ModuleList()
         for _ in range(num_gnn_layers):
             self.gnn_layers.append(
@@ -31,7 +27,7 @@ class GNNBranchE3(nn.Module):
                     pos_dim=3,
                     m_dim=hidden_dim,
                     update_feats=True,
-                    update_coors=False, # ZMĚNA: Zmrazíme atomy!
+                    update_coors=False, # Zmrazíme atomy
                     dropout=dropout
                 )
             )
@@ -40,31 +36,25 @@ class GNNBranchE3(nn.Module):
 
     def forward(self, batch):
         # 1. Projekce původních ESM features
-        x_feats = self.protein_projection(batch.x)
+        feats = self.protein_projection(batch.x)
         
-        # 2. Centrování souřadnic (ZABRÁNÍ EXPLOZI LOSS A NAN HODNOTÁM)
+        # 2. Centrování souřadnic
         coors = batch.pos
-        # Spočítáme těžiště pro každý graf v batchi a odečteme ho
         mean_coors = global_mean_pool(coors, batch.batch)
         coors = coors - mean_coors[batch.batch]
         
-        feats = x_feats
-        
         for layer in self.gnn_layers:
-            # Sbalíme pos a feats pro layer
-            x_in = torch.cat([coors, feats], dim=-1)
-            
-            # EGNN_Sparse vrací zřetězené [coors_out, feats_out]
-            out = layer(x=x_in, edge_index=batch.edge_index, batch=batch.batch)
-            
-            # Rozbalíme zpět
-            coors = out[:, :3]
-            feats = out[:, 3:]
+            # Čisté volání EGNN (vrací novou features a nezměněné coors)
+            feats, coors = layer(
+                x=feats, 
+                pos=coors, 
+                edge_index=batch.edge_index, 
+                batch=batch.batch
+            )
             
         feats = self.dropout(feats)
         
         # 3. Pooling pro celý graf
-        # Získáme 1 vektor pro každý graf v batchi.
         graph_embs = global_mean_pool(feats, batch.batch)
         
         return graph_embs

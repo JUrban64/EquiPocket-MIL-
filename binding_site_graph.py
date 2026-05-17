@@ -78,7 +78,9 @@ class BindingSiteGraphDataset:
                     # Provide an error fallback lookup in case 'label' missing
                     from Binding_site_ex import COFACTOR_FUNCTIONAL_GROUPS
                     supported = list(COFACTOR_FUNCTIONAL_GROUPS.keys())
-                    if act in supported:
+                    if lig in supported:
+                        lbl = supported.index(lig)
+                    elif act in supported:
                         lbl = supported.index(act)
                 except Exception:
                     pass
