@@ -272,24 +272,20 @@ class BindingSiteExtractor:
         # Find binding site residues
         binding_site_residues = []
         binding_site_indices = []
-        
-        for i, residue in enumerate(protein_chain.get_residues()):
+
+        aa_index = 0  # Vlastní počítadlo pro aminokyseliny
+        for residue in protein_chain.get_residues():
             if not self._is_aa(residue):
-                continue
-            
-            # Get all atom coordinates for this residue
-            residue_coords = np.array([
-                atom.get_coord() 
-                for atom in residue.get_atoms()
-            ])
-            
-            # Compute minimum distance to ligand
-            distances = cdist(residue_coords, ligand_coords)
-            min_dist = distances.min()
+                continue  # Přeskočí vodu/ligandy a nezvedne aa_index
+                
+            residue_coords = np.array([atom.get_coord() for atom in residue.get_atoms()])
+            min_dist = cdist(residue_coords, ligand_coords).min()
             
             if min_dist <= self.threshold:
                 binding_site_residues.append(residue)
-                binding_site_indices.append(i)
+                binding_site_indices.append(aa_index) # Ukládáme správný ESM index
+                
+            aa_index += 1
         
         # Extract local contact map and get ca_coords
         local_contact_map, ca_coords_list = self._compute_local_contact_map(

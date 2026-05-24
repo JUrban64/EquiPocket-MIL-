@@ -17,7 +17,7 @@ def generate_embeddings(
     batch_size=4,
     hidden_dim=64,
     num_heads=4,
-    num_classes=6,
+    num_classes=5,
     device=None
 ):
     if device is None:
@@ -138,7 +138,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--hidden-dim', type=int, default=64)
     parser.add_argument('--num-heads', type=int, default=4)
-    parser.add_argument('--num-classes', type=int, default=6)
+    parser.add_argument('--num-classes', type=int, default=5)
     parser.add_argument('--device', default=None)
     
     args = parser.parse_args()

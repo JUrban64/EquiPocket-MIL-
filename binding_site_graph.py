@@ -4,7 +4,6 @@ import numpy as np
 import argparse
 import json
 import os
-import importlib.util
 from esm2_feature_ex import ESMFeatureExtractor
 
 
@@ -27,13 +26,6 @@ EDGE_TYPE_PP = 0   # Protein–Protein  (kontaktní mapa)
 
 # Typy uzlů
 NODE_TYPE_PROTEIN = 0
-
-# Typy interakcí (pro edge feature encoding)
-INTERACTION_TYPES = ['hbond_candidate', 'hydrophobic', 'ionic', 'other']
-ITYPE_TO_IDX = {t: i for i, t in enumerate(INTERACTION_TYPES)}
-
-# Pevná dimenze edge features: [distance_norm, hbond, hydrophobic, ionic, other]
-EDGE_ATTR_DIM = 5
 
 
 class BindingSiteGraphDataset:
@@ -78,9 +70,7 @@ class BindingSiteGraphDataset:
                     # Provide an error fallback lookup in case 'label' missing
                     from Binding_site_ex import COFACTOR_FUNCTIONAL_GROUPS
                     supported = list(COFACTOR_FUNCTIONAL_GROUPS.keys())
-                    if lig in supported:
-                        lbl = supported.index(lig)
-                    elif act in supported:
+                    if act in supported:
                         lbl = supported.index(act)
                 except Exception:
                     pass
@@ -188,52 +178,42 @@ class BindingSiteGraphDataset:
         pos_tensor = torch.tensor(pos_prot, dtype=torch.float32)
         
         # ---- EDGES ----
-        # Všechny edge_attr mají PEVNOU dimenzi EDGE_ATTR_DIM = 5:
-        #   [distance_norm, hbond, hydrophobic, ionic, other]
         all_edges = []      # list of [src, dst]
         all_edge_types = [] # list of int
-        all_edge_attr = []  # list of [EDGE_ATTR_DIM] float vectors
         
-        # 1) P-P edges: z kontaktní mapy (vektorizovaně přes np.where)
-        # JSON z Binding_site_ex.py obsahuje contact_map jako list of lists,
-        # proto sjednotíme na numpy array.
+        # 1) P-P edges: z kontaktní mapy (vektorizovaně)
         contact_map = np.asarray(bs_info['contact_map'], dtype=np.float32)
         pp_rows, pp_cols = np.where(contact_map > 0.5)
         pp_mask = pp_rows != pp_cols
         pp_rows = pp_rows[pp_mask]
         pp_cols = pp_cols[pp_mask]
+        
         if len(pp_rows) > 0:
-            pp_weights = contact_map[pp_rows, pp_cols]
             pp_edges = np.stack([pp_rows, pp_cols], axis=1)          # [E_pp, 2]
-            pp_attr = np.zeros((len(pp_rows), EDGE_ATTR_DIM))       # [E_pp, 5]
-            pp_attr[:, 0] = pp_weights
             all_edges.extend(pp_edges.tolist())
             all_edge_types.extend([EDGE_TYPE_PP] * len(pp_rows))
-            all_edge_attr.extend(pp_attr.tolist())
         
         # ---- Sloučení hran ----
         if all_edges:
             edge_index = torch.LongTensor(all_edges).t().contiguous()
             edge_type = torch.LongTensor(all_edge_types)
-            edge_attr = torch.FloatTensor(all_edge_attr)  # [E, 5] – vždy stejná dim
         else:
-            # Fallback: fully connected protein-only
-            edge_list = [[i, j] for i in range(n_prot) for j in range(n_prot) if i != j]
-            edge_index = torch.LongTensor(edge_list).t().contiguous()
+            # Fallback: fully connected protein-only (včetně self-loops jako pojistka)
+            edge_list = [[i, j] for i in range(n_prot) for j in range(n_prot)]
+            if not edge_list and n_prot > 0:
+                edge_list = [[0, 0]]
+            edge_index = torch.LongTensor(edge_list).t().contiguous() if edge_list else torch.empty((2, 0), dtype=torch.long)
             edge_type = torch.zeros(len(edge_list), dtype=torch.long)
-            edge_attr = torch.zeros(len(edge_list), EDGE_ATTR_DIM)
         
         # ---- Label ----
         label_val = int(bs_info.get('label', -1))
-        # (Filtered above, so this should not be -1 in practice)
         y = torch.LongTensor([label_val])
         
-        # ---- Sestavení PyG Data ----
+        # ---- Sestavení PyG Data (BEZ edge_attr) ----
         graph = Data(
             x=x,
             pos=pos_tensor,
             edge_index=edge_index,
-            edge_attr=edge_attr,
             edge_type=edge_type,
             node_type=node_type,
             y=y,
@@ -249,35 +229,6 @@ class BindingSiteGraphDataset:
         )
         
         return graph
-    
-    def _contact_map_to_edges(self, contact_map, threshold=0.5):
-        """
-        Convert contact map to edge list (P-P edges only).
-        Vektorizovaná verze pomocí np.where.
-        
-        Returns:
-            edge_index: [2, num_edges]
-            edge_attr: [num_edges, 1] (contact probability)
-        """
-        rows, cols = np.where(contact_map > threshold)
-        mask = rows != cols
-        rows, cols = rows[mask], cols[mask]
-        
-        if len(rows) == 0:
-            # Fallback: fully connected
-            n = contact_map.shape[0]
-            rows, cols = np.meshgrid(np.arange(n), np.arange(n), indexing='ij')
-            rows, cols = rows.ravel(), cols.ravel()
-            mask = rows != cols
-            rows, cols = rows[mask], cols[mask]
-            edge_weights = np.ones(len(rows), dtype=np.float32)
-        else:
-            edge_weights = contact_map[rows, cols].astype(np.float32)
-        
-        edge_index = torch.LongTensor(np.stack([rows, cols])).contiguous()
-        edge_attr = torch.FloatTensor(edge_weights).unsqueeze(1)
-        
-        return edge_index, edge_attr
     
     def __len__(self):
         return len(self.data)
@@ -322,28 +273,20 @@ def _attach_esm_embeddings_batch(batch_items, esm_extractor):
     esm_dim = _resolve_esm_dim(embeddings_batch)
 
     for i, item in enumerate(batch_items):
+        bs_indices = item.get('binding_site_indices', [])
+        n_bs = int(item.get('n_binding_site', 0))
+        full_emb = embeddings_batch[i]
+        
+        valid_indices = []
+        bs_emb = None
 
-        try:
-            bs_indices = item.get('binding_site_indices', [])
-            n_bs = int(item.get('n_binding_site', 0))
-            full_emb = embeddings_batch[i]
-            if full_emb is None:
-                raise ValueError('ESM embedding is None')
-
-            if not bs_indices:
-                raise ValueError(
-                    f"No binding_site_indices for protein {item.get('protein_id', item.get('pdb_file', 'unknown'))}"
-                )
-
+        if full_emb is not None and bs_indices:
             valid_indices = [idx for idx in bs_indices if idx < full_emb.shape[0]]
-            if not valid_indices:
-                raise ValueError(
-                    f"No valid BS indices after ESM truncation for protein {item.get('protein_id', item.get('pdb_file', 'unknown'))}"
-                )
+            if valid_indices:
+                bs_emb = full_emb[np.asarray(valid_indices, dtype=np.int64), :]
 
-            bs_emb = full_emb[np.asarray(valid_indices, dtype=np.int64), :]
-        except Exception as e:
-            print(f"Error extracting ESM embeddings for item {i} (protein_id={item.get('protein_id', item.get('pdb_file', 'unknown'))}): {e}")
+        if bs_emb is None or bs_emb.shape[0] == 0:
+            print(f"Fallback to zero embeddings for item {i} (protein_id={item.get('protein_id', item.get('pdb_file', 'unknown'))})")
             bs_emb = np.zeros((n_bs, esm_dim), dtype=np.float32)
             valid_indices = []
 

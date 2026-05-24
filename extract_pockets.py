@@ -5,39 +5,73 @@ import re
 
 
 def parse_prediction_file(pfile):
-    """Return list of (pocket_id, score, residues_tokens)"""
+    """Return list of (pocket_id, prob_score, residues_tokens)"""
     pockets = []
     p = Path(pfile)
     with p.open('r', encoding='utf-8') as f:
+        headers = []
         for line in f:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-            # CSV or whitespace
+                
+            if line.startswith('name'):
+                headers = [x.strip() for x in line.split(',')]
+                continue
+                
+            # CSV format (P2Rank default)
             if ',' in line:
-                parts = [x.strip().strip('"').strip("'") for x in line.split(',') if x.strip()]
-            else:
-                parts = line.split()
-
-            if len(parts) < 2:
-                continue
-            pid = parts[0]
-            # find first numeric token for score
-            score = None
-            for tok in parts[1:]:
-                try:
-                    score = float(tok)
-                    break
-                except ValueError:
+                parts = [x.strip().strip('"').strip("'") for x in line.split(',')]
+                if len(parts) < 2:
                     continue
-            if score is None:
-                continue
-            # residues after score
-            # find index of score token
-            idx = parts.index(str(int(score))) if str(int(score)) in parts else None
-            # fallback: use parts after second token
-            residues = parts[2:]
-            pockets.append((pid, score, residues))
+                
+                pid = parts[0]
+                
+                if headers and 'probability' in headers and 'residue_ids' in headers:
+                    prob_idx = headers.index('probability')
+                    res_idx = headers.index('residue_ids')
+                    
+                    try:
+                        prob = float(parts[prob_idx])
+                    except ValueError:
+                        continue
+                        
+                    residues = parts[res_idx].split()
+                    pockets.append((pid, prob, residues))
+                else:
+                    # Fallback to positional indices if headers are missing
+                    try:
+                        prob = float(parts[3]) # probability is usually 4th column
+                    except (ValueError, IndexError):
+                        try:
+                            prob = float(parts[2]) # score fallback
+                        except:
+                            continue
+                            
+                    try:
+                        residues = parts[9].split()
+                    except IndexError:
+                        continue
+                        
+                    pockets.append((pid, prob, residues))
+            else:
+                # Whitespace separated fallback
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                pid = parts[0]
+                prob = None
+                for tok in parts[1:]:
+                    try:
+                        prob = float(tok)
+                        break
+                    except ValueError:
+                        continue
+                if prob is None:
+                    continue
+                residues = parts[2:]
+                pockets.append((pid, prob, residues))
+                
     return pockets
 
 
@@ -181,15 +215,21 @@ def expand_keep_set(structure, keep_set, seq_window=4, ca_cutoff=8.0):
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="Extract pockets from PDB based on P2Rank predictions.")
+    parser.add_argument("--prob_thresh", type=float, default=0.5, help="Minimum probability score to keep the pocket. (default: 0.5)")
+    args = parser.parse_args()
+
     base = Path(__file__).parent.joinpath('..', 'structures').resolve()
     pattern = "*/**/*_prank_output/*.pdb_predictions.csv"
     files = glob.glob(pattern)
     print(f"found {len(files)} prediction files with pattern: {pattern}")
+    print(f"Using probability threshold: {args.prob_thresh}")
     total = 0
     for f in files:
         print(f"Processing: {f}")
         try:
-            n = extract_pockets_from_prediction(f, prob_thresh=0.5)
+            n = extract_pockets_from_prediction(f, prob_thresh=args.prob_thresh)
             total += n
         except Exception as e:
             print(f"Error processing {f}: {e}")
