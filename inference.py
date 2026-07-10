@@ -91,14 +91,14 @@ def build_graph_from_pocket(pfile, esm_extractor, parser):
     )
     return graph
 
-def main(pdb_path):
+def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"--- PMCP INFERENCE PIPELINE ---")
     print(f"Zařízení: {device}")
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # 1. P2Rank
-        run_p2rank(pdb_path, temp_dir)
+        run_p2rank(args.pdb_file, temp_dir)
         
         pocket_files = glob.glob(os.path.join(temp_dir, '**', '*_pocket_*.pdb'), recursive=True)
         if not pocket_files:
@@ -127,7 +127,7 @@ def main(pdb_path):
         # 3. EGNN Encoder
         print("-> Načítám EGNN model pro kódování kapes...")
         egnn_model = GraphClassifierE3(
-            node_dim=1280, hidden_dim=64, num_attention_heads=4, num_classes=len(SUPPORTED_COFACTORS)
+            node_dim=1280, hidden_dim=256, num_attention_heads=4, num_classes=len(SUPPORTED_COFACTORS)
         ).to(device)
         
         if not os.path.exists("gnn_model_best_e3.pt"):
@@ -155,7 +155,11 @@ def main(pdb_path):
         bag_features = torch.stack(pocket_embeddings) # [num_pockets, 64]
         in_features = bag_features.shape[1]
         
-        mil_model = AttentionMIL(in_features=in_features, num_classes=len(SUPPORTED_COFACTORS))
+        mil_model = AttentionMIL(
+            in_features=in_features, 
+            num_classes=len(SUPPORTED_COFACTORS),
+            use_self_attention=args.use_self_attention
+        )
         if not os.path.exists("mil_model_best.pt"):
             print("Chyba: Soubor mil_model_best.pt nebyl nalezen. Natrénuj MIL klasifikátor.")
             sys.exit(1)
@@ -178,7 +182,7 @@ def main(pdb_path):
         print("\\n" + "="*50)
         print("                VÝSLEDEK INFERENCE")
         print("="*50)
-        print(f"PDB Soubor:       {os.path.basename(pdb_path)}")
+        print(f"PDB Soubor:       {os.path.basename(args.pdb_file)}")
         print(f"Predikce Kofaktoru: {pred_class} (Jistota: {confidence:.1f}%)")
         print("-" * 50)
         print("Nalezené kapsy a jejich důležitost (Attention):")
@@ -194,10 +198,12 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Inference pipeline for cofactor prediction")
     parser.add_argument('pdb_file', help="Cesta k PDB souboru (např. muj_protein.pdb)")
+    parser.add_argument('--use-self-attention', action='store_true', default=True, 
+                        help="Použít Transformer self-attention v MIL (odpovídá tréninku)")
     args = parser.parse_args()
     
     if not os.path.exists(args.pdb_file):
         print(f"Soubor {args.pdb_file} neexistuje!")
         sys.exit(1)
         
-    main(args.pdb_file)
+    main(args)

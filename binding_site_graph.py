@@ -240,7 +240,7 @@ class BindingSiteGraphDataset:
         return graph
 
 
-def _attach_esm_embeddings_batch(batch_items, esm_extractor):
+def _attach_esm_embeddings_batch(batch_items, esm_extractor, esm_batch_size=1):
     """Compute ESM embeddings on-the-fly for one batch of binding-site records."""
     def _resolve_esm_dim(local_embeddings):
         for emb in local_embeddings:
@@ -255,7 +255,7 @@ def _attach_esm_embeddings_batch(batch_items, esm_extractor):
     full_sequences = [item.get('full_sequence', '') for item in batch_items]
     try:
         embeddings_batch = esm_extractor.batch_extract(
-            full_sequences, batch_size=len(full_sequences)
+            full_sequences, batch_size=esm_batch_size
         )
     except Exception as e:
         print(f"Batch ESM extraction failed, switching to per-item mode: {e}")
@@ -309,7 +309,8 @@ def _attach_esm_embeddings_batch(batch_items, esm_extractor):
 
 
 def build_and_save_graphs_batched(binding_sites, output_dir, graph_batch_size=8,
-                                  esm_model_name='facebook/esm2_t33_650M_UR50D'):
+                                  esm_model_name='facebook/esm2_t33_650M_UR50D',
+                                  esm_batch_size=1):
     """Build graphs on-the-fly in batches and save each batch separately."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -323,7 +324,7 @@ def build_and_save_graphs_batched(binding_sites, output_dir, graph_batch_size=8,
         end = min(start + graph_batch_size, total)
         batch_items = [dict(binding_sites[i]) for i in range(start, end)]
 
-        _attach_esm_embeddings_batch(batch_items, esm_extractor)
+        _attach_esm_embeddings_batch(batch_items, esm_extractor, esm_batch_size=esm_batch_size)
 
         dataset = BindingSiteGraphDataset(
             batch_items,
@@ -378,6 +379,8 @@ def build_and_save_graphs_batched(binding_sites, output_dir, graph_batch_size=8,
 
         del graphs
         del dataset
+        import gc
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -389,6 +392,7 @@ def build_and_save_graphs_batched(binding_sites, output_dir, graph_batch_size=8,
         'num_skipped': total_skipped,
         'graph_batch_size': graph_batch_size,
         'esm_model_name': esm_model_name,
+        'esm_batch_size': esm_batch_size,
         'files': batch_files,
     }
     manifest_path = os.path.join(output_dir, 'manifest.json')
@@ -429,10 +433,26 @@ if __name__ == '__main__':
         default=None,
         help='Optional path to text file containing protein IDs to filter from the input JSON (e.g. train.txt).'
     )
+    parser.add_argument(
+        '--esm-batch-size',
+        type=int,
+        default=1,
+        help='Batch size for ESM embedding extraction (default: 1 to minimize memory usage)'
+    )
+    parser.add_argument(
+        '--num-threads',
+        type=int,
+        default=2,
+        help='Limit CPU threads for PyTorch to prevent memory explosion (default: 2)'
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.input_json):
         raise FileNotFoundError(f"Input JSON not found: {args.input_json}")
+
+    if args.num_threads > 0:
+        print(f"Setting PyTorch CPU threads to {args.num_threads} to control memory usage.")
+        torch.set_num_threads(args.num_threads)
 
     binding_sites = BindingSiteGraphDataset.load_binding_sites_json(args.input_json)
     
@@ -445,11 +465,17 @@ if __name__ == '__main__':
         print(f"Filtered down to {len(filtered_sites)} binding sites from {len(binding_sites)}")
         binding_sites = filtered_sites
 
+    import random
+    print("Shuffling dataset to ensure mixed classes in graph batches...")
+    random.seed(42)
+    random.shuffle(binding_sites)
+
     manifest_path, total_graphs = build_and_save_graphs_batched(
         binding_sites,
         output_dir=args.output_dir,
         graph_batch_size=args.graph_batch_size,
         esm_model_name=args.esm_model_name,
+        esm_batch_size=args.esm_batch_size,
     )
 
     print(f"Created {total_graphs} graphs")

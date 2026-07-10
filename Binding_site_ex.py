@@ -228,15 +228,32 @@ class BindingSiteExtractor:
               f"'{best_name}' ({hetatm_candidates[best_name]} heavy atoms)")
         return best_name
 
-    def extract_binding_site(self, pdb_file, ligand_name='NAD'):
+    def _extract_label_from_path(self, pdb_file):
+        """Získá jméno ground-truth kofaktoru z názvu složky v cestě k souboru."""
+        path_parts = Path(pdb_file).parts
+        folder_to_ligand = {
+            'NAD': 'NAD',
+            'FAD': 'FAD',
+            'ATP': 'ATP',
+            'COA': 'acetyl-CoA',
+            'B12': 'B12'
+        }
+        for part in path_parts:
+            if part in folder_to_ligand:
+                return folder_to_ligand[part]
+        return 'unknown'
+
+    def extract_binding_site(self, pdb_file, ligand_name=None):
         """
         Args:
             pdb_file: path to PDB file
-            ligand_name: residue name of ligand (NAD, ATP, FAD, etc.)
+            ligand_name: (Ignorováno) Ponecháno pro zpětnou kompatibilitu
         
         Returns:
             binding_site_info: dict with binding site data
         """
+        # 1. Zjistíme Ground Truth label z názvu složky
+        expected_ligand = self._extract_label_from_path(pdb_file)
         # Preprocess PDB to fix 4-char HETATM residue names (Boltz LIG1 etc.)
         parsed_path, needs_cleanup = self._preprocess_pdb(pdb_file)
         try:
@@ -246,8 +263,8 @@ class BindingSiteExtractor:
                 import os
                 os.unlink(parsed_path)
         
-        # Resolve actual ligand name (handles Boltz-docked LIG1 etc.)
-        actual_ligand_name = self._resolve_ligand_name(structure, ligand_name)
+        # Resolve actual ligand name (we pass expected_ligand as a hint, but it falls back to largest HETATM if not found)
+        actual_ligand_name = self._resolve_ligand_name(structure, expected_ligand)
         
         # Get protein chain (usually chain A)
         model = structure[0]
@@ -263,7 +280,7 @@ class BindingSiteExtractor:
         # Extract full sequence
         full_sequence = self._get_sequence(protein_chain)
         
-        # Get ligand coordinates (using resolved name) rqě  1      
+        # Get ligand coordinates (using resolved name)
         ligand_coords = self._get_ligand_coords(structure, actual_ligand_name)
         
         if ligand_coords is None:
@@ -298,12 +315,12 @@ class BindingSiteExtractor:
             for res in binding_site_residues
         ])
         
-        # Determine true label based on the extracted cofactor name (actual_ligand_name)
+        # Determine true label based PURELY on the folder name
         label = -1
-        if actual_ligand_name in self.supported_cofactors:
-            label = self.supported_cofactors.index(actual_ligand_name)
+        if expected_ligand in self.supported_cofactors:
+            label = self.supported_cofactors.index(expected_ligand)
         else:
-            print(f"Warning: Unknown cofactor {actual_ligand_name} in {pdb_file}")
+            print(f"Warning: Unknown cofactor from path: {expected_ligand} in {pdb_file}")
             
         return {
             'protein_id': self._protein_id_from_path(pdb_file),
@@ -315,8 +332,8 @@ class BindingSiteExtractor:
             'contact_map': local_contact_map,
             'protein_coords': ca_coords_list,
             'n_binding_site': len(binding_site_residues),
-            'ligand_name': ligand_name,  # Uložíme původní (logický) název
-            'actual_ligand_name': actual_ligand_name,  # Skutečný název v PDB
+            'ligand_name': expected_ligand,  # Uložíme 100% jistý název ze složky
+            'actual_ligand_name': actual_ligand_name,  # Pouze pro informaci (co našel fyzicky)
             'pdb_file': pdb_file,
             # Ligand info vynecháno (pouze protein)
             'ligand_atoms': [],
@@ -580,8 +597,7 @@ if __name__ == '__main__':
                         help='Optional path to text file containing protein IDs to process (e.g. train.txt).')
     parser.add_argument('--output-json', default='binding_sites_by_protein.json',
                         help='Output JSON file path.')
-    parser.add_argument('--ligand-name', default='NAD',
-                        help='Ligand residue name to extract.')
+    # Odstraněn argument --ligand-name, protože se teď zjišťuje ze složky
     args = parser.parse_args()
 
     extractor = BindingSiteExtractor(distance_threshold=6.0)
@@ -612,7 +628,7 @@ if __name__ == '__main__':
     binding_sites_by_protein = {}
     for pdb_file in tqdm.tqdm(pdb_files, desc="Processing PDB files"):
         try:
-            bs_info = extractor.extract_binding_site(pdb_file, ligand_name=args.ligand_name)
+            bs_info = extractor.extract_binding_site(pdb_file)
             binding_sites_by_protein[bs_info['protein_id']] = bs_info
         except Exception as e:
             print(f"Error processing {pdb_file}: {e}")

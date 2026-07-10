@@ -5,7 +5,8 @@ import numpy as np
 import os
 import argparse
 import logging
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report, average_precision_score
+from sklearn.preprocessing import label_binarize
 from collections import defaultdict
 
 # Nastavení logování
@@ -42,42 +43,73 @@ class EarlyStopping:
 
 class AttentionMIL(nn.Module):
     """
-    Attention-based Multi-Instance Learning model s podporou pro Multi-Head Attention, Gated Attention a teplotním škálováním.
-    Přidána LayerNorm a LeakyReLU pro robustnost a odstranění problému se zamrzáním (vanishing gradient) u Tanh.
+    Attention-based Multi-Instance Learning model obohacený o Self-Attention (Transformer Encoder),
+    s podporou pro Multi-Head Attention, Gated Attention a teplotním škálováním.
     """
-    def __init__(self, in_features, hidden_dim=128, num_classes=5, dropout=0.3, num_heads=1, attention_temp=1.0, gated_attention=False):
+    def __init__(self, in_features, hidden_dim=128, num_classes=5, dropout=0.3, num_heads=1, 
+                 attention_temp=1.0, gated_attention=False, use_self_attention=False, self_attn_heads=4):
         super().__init__()
         self.num_heads = num_heads
         self.attention_temp = attention_temp
         self.gated_attention = gated_attention
+        self.use_self_attention = use_self_attention
         
-        if gated_attention:
-            # Gated Attention podle Ilse et al. (2018) s LeakyReLU a LayerNorm
-            self.attention_V = nn.Sequential(
+        # --- PŘIDÁNA SELF-ATTENTION (TRANSFORMER) VRSTVA ---
+        if self.use_self_attention:
+            # Projekce na hidden_dim zajišťuje dělitelnost počtem hlav (např. 128 je dělitelné 4)
+            self.input_proj = nn.Sequential(
                 nn.Linear(in_features, hidden_dim),
                 nn.LayerNorm(hidden_dim),
                 nn.LeakyReLU(0.1)
             )
+            # Standardní Transformer Encoder blok (kapsy spolu komunikují)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=self_attn_heads,
+                dim_feedforward=hidden_dim * 2,
+                dropout=dropout,
+                batch_first=True
+            )
+            self.self_attention = nn.TransformerEncoder(encoder_layer, num_layers=1)
+            mil_in_features = hidden_dim
+        else:
+            mil_in_features = in_features
+        
+        if gated_attention:
+            # Gated Attention podle Ilse et al. (2018) s LeakyReLU a LayerNorm
+            self.attention_V = nn.Sequential(
+                nn.Linear(mil_in_features, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.LeakyReLU(0.1)
+            )
             self.attention_U = nn.Sequential(
-                nn.Linear(in_features, hidden_dim),
+                nn.Linear(mil_in_features, hidden_dim),
                 nn.Sigmoid()
             )
             self.attention_w = nn.Linear(hidden_dim, num_heads)
         else:
             # Klasická Attention s LeakyReLU a LayerNorm stabilizací
             self.attention = nn.Sequential(
-                nn.Linear(in_features, hidden_dim),
+                nn.Linear(mil_in_features, hidden_dim),
                 nn.LayerNorm(hidden_dim),
                 nn.LeakyReLU(0.1),
-                nn.Linear(hidden_dim, num_heads)  # Výstupní rozměr: [num_pockets, num_heads]
+                nn.Linear(hidden_dim, num_heads)  
             )
         
-        # Každá hlava vygeneruje svůj vlastní embedding o rozměru in_features.
-        classifier_input_dim = in_features * num_heads
+        # Každá hlava vygeneruje svůj vlastní embedding
+        classifier_input_dim = mil_in_features * num_heads
         
         # Klasifikátor zpracovává sloučenou vícehlavou reprezentaci celého proteinu
         self.classifier = nn.Sequential(
             nn.Linear(classifier_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -87,6 +119,13 @@ class AttentionMIL(nn.Module):
     def forward(self, x):
         # x shape: [num_pockets, in_features]
         
+        # --- APLIKACE SELF-ATTENTION (KOMUNIKACE MEZI KAPSAMI) ---
+        if self.use_self_attention:
+            x = self.input_proj(x)              # [num_pockets, hidden_dim]
+            x_3d = x.unsqueeze(0)               # Změna na 3D: [1, num_pockets, hidden_dim]
+            x_trans = self.self_attention(x_3d) # Kontextualizace: [1, num_pockets, hidden_dim]
+            x = x_trans.squeeze(0)              # Zpět na 2D: [num_pockets, hidden_dim]
+        
         if self.gated_attention:
             V_out = self.attention_V(x)          # [num_pockets, hidden_dim]
             U_out = self.attention_U(x)          # [num_pockets, hidden_dim]
@@ -95,16 +134,16 @@ class AttentionMIL(nn.Module):
         else:
             A_raw = self.attention(x)            # [num_pockets, num_heads]
         
-        # Aplikace teplotního škálování před softmaxem (zaostření rozdělení vah)
+        # Aplikace teplotního škálování před softmaxem
         A_scaled = A_raw / self.attention_temp
         
         # Softmax přes dimenzi 0 (kapsy) pro každou hlavu zvlášť
         A = torch.softmax(A_scaled, dim=0)  # [num_pockets, num_heads]
         
         # Seskupení kapes pro každou hlavu zvlášť
-        Z_heads = torch.mm(A.t(), x)        # [num_heads, in_features]
+        Z_heads = torch.mm(A.t(), x)        # [num_heads, mil_in_features]
         
-        # Zploštění všech hlav do jednoho vektoru: [1, num_heads * in_features]
+        # Zploštění všech hlav do jednoho vektoru: [1, num_heads * mil_in_features]
         Z = Z_heads.view(1, -1)
         
         # Klasifikace celého proteinu
@@ -154,7 +193,8 @@ def load_split_ids():
 def train_and_evaluate(bags, epochs=100, lr=1e-3, batch_size=64, hidden_dim=128, dropout=0.3, 
                        weight_decay=1e-4, patience=15, num_heads=1, attention_temp=1.0, 
                        model_path="mil_model_best.pt", evaluate_test=False,
-                       gated_attention=False, balance_classes=False):
+                       gated_attention=False, balance_classes=False,
+                       use_self_attention=False, self_attn_heads=4):
     
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     logging.info(f"Using device: {device}")
@@ -214,10 +254,10 @@ def train_and_evaluate(bags, epochs=100, lr=1e-3, batch_size=64, hidden_dim=128,
     
     model = AttentionMIL(in_features=in_features, hidden_dim=hidden_dim, 
                          num_classes=num_classes, dropout=dropout, num_heads=num_heads,
-                         attention_temp=attention_temp, gated_attention=gated_attention)
+                         attention_temp=attention_temp, gated_attention=gated_attention,
+                         use_self_attention=use_self_attention, self_attn_heads=self_attn_heads)
     model = model.to(device)
     
-    # Výpočet vyvážených vah tříd
     if balance_classes:
         train_labels = [b['label'].item() for b in train_bags]
         class_counts = np.bincount(train_labels, minlength=num_classes)
@@ -237,18 +277,18 @@ def train_and_evaluate(bags, epochs=100, lr=1e-3, batch_size=64, hidden_dim=128,
     else:
         criterion = nn.CrossEntropyLoss()
     
-    # Separace parametrů: Attention dostane agresivnější LR a žádný weight decay
+    # Separace parametrů: Agresivnější LR dostane pouze MIL pooling vrstva, nikoliv Transformer!
     attention_params = []
     other_params = []
     for name, param in model.named_parameters():
-        if "attention" in name:
+        if "attention" in name and "self_attention" not in name:
             attention_params.append(param)
         else:
             other_params.append(param)
             
     optimizer = optim.Adam([
         {'params': other_params, 'weight_decay': weight_decay, 'lr': lr},
-        {'params': attention_params, 'weight_decay': 0.0, 'lr': lr * 10}  # 10x vyšší LR pro prolomení symetrie!
+        {'params': attention_params, 'weight_decay': 0.0, 'lr': lr * 10}  # 10x vyšší LR pro prolomení symetrie u MIL!
     ])
     
     early_stopper = EarlyStopping(patience=patience)
@@ -361,6 +401,14 @@ def train_and_evaluate(bags, epochs=100, lr=1e-3, batch_size=64, hidden_dim=128,
     except ValueError:
         pass
         
+    try:
+        num_classes_found = len(y_probs[0])
+        y_true_bin = label_binarize(y_true, classes=list(range(num_classes_found)))
+        pr_auc = average_precision_score(y_true_bin, y_probs, average='macro')
+        logging.info(f"PR AUC:   {pr_auc:.4f}")
+    except Exception as e:
+        logging.warning(f"Nepodařilo se spočítat PR AUC: {e}")
+        
     logging.info("\nClassification Report:")
     logging.info("\n" + classification_report(y_true, y_pred, zero_division=0))
     
@@ -413,6 +461,13 @@ if __name__ == "__main__":
                         help='Softmax temperature for attention weights (values < 1.0 sharpen the distribution)')
     parser.add_argument('--gated-attention', action='store_true',
                         help='Use gated attention mechanism in MIL (Ilse et al. 2018)')
+    
+    # NOVÉ PARAMETRY PRO SELF-ATTENTION
+    parser.add_argument('--use-self-attention', action='store_true',
+                        help='Use Transformer Self-Attention layer before MIL pooling')
+    parser.add_argument('--self-attn-heads', type=int, default=4,
+                        help='Number of heads for Transformer Self-Attention')
+    
     parser.add_argument('--balance-classes', action='store_true',
                         help='Calculate and apply balanced class weights in CrossEntropyLoss to handle imbalanced dataset')
     parser.add_argument('--model-path', default='mil_model_best.pt', help='Path to save/load best model')
@@ -439,5 +494,7 @@ if __name__ == "__main__":
         model_path=args.model_path,
         evaluate_test=args.evaluate_test,
         gated_attention=args.gated_attention,
-        balance_classes=args.balance_classes
+        balance_classes=args.balance_classes,
+        use_self_attention=args.use_self_attention,
+        self_attn_heads=args.self_attn_heads
     )

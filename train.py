@@ -78,10 +78,12 @@ def compute_macro_f1(y_true, y_pred):
     return float(f1_score(y_true, y_pred, average='macro', zero_division=0))
 
 
-def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device, val_ids=None):
+def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device, val_ids=None, contrastive_criterion=None, contrastive_weight=0.0, ce_weight=1.0):
     """Evaluate loss and AP over serialized graph batches using DataLoaders."""
     model.eval()
     total_loss = 0.0
+    total_ce_loss = 0.0
+    total_con_loss = 0.0
     total_items = 0
     all_labels = []
     all_preds = []
@@ -97,16 +99,40 @@ def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device,
             for pyg_batch in loader:
                 pyg_batch = pyg_batch.to(device)
                 y = pyg_batch.y.view(-1).long()
-                logits = model(pyg_batch)
-                loss = criterion(logits, y)
-
-                preds = logits.argmax(dim=1)
                 bs = int(y.shape[0])
+                
+                has_classifier = hasattr(model, 'classifier')
+                embeddings = None
+                if has_classifier:
+                    if hasattr(model, 'get_embedding'):
+                        embeddings = model.get_embedding(pyg_batch)
+                        logits = model.classifier(embeddings)
+                    else:
+                        logits = model(pyg_batch)
+                else:
+                    embeddings = model.get_embedding(pyg_batch) if hasattr(model, 'get_embedding') else None
+                    logits = None
+
+                loss = torch.tensor(0.0, device=device)
+                
+                if has_classifier and logits is not None and ce_weight > 0.0:
+                    ce_loss = criterion(logits, y)
+                    loss = loss + ce_weight * ce_loss
+                    total_ce_loss += ce_loss.item() * bs
+
+                if embeddings is not None and contrastive_weight > 0.0 and contrastive_criterion is not None:
+                    supcon_embeddings = model.projection_head(embeddings) if hasattr(model, 'projection_head') else embeddings
+                    con_loss = contrastive_criterion(supcon_embeddings, y)
+                    loss = loss + contrastive_weight * con_loss
+                    total_con_loss += con_loss.item() * bs
+
+                if logits is not None:
+                    preds = logits.argmax(dim=1)
+                    all_labels.extend(y.detach().cpu().numpy().tolist())
+                    all_preds.extend(preds.detach().cpu().numpy().tolist())
 
                 total_loss += loss.item() * bs
                 total_items += bs
-                all_labels.extend(y.detach().cpu().numpy().tolist())
-                all_preds.extend(preds.detach().cpu().numpy().tolist())
 
             del loader
             del graphs
@@ -114,8 +140,10 @@ def evaluate_from_batch_paths(model, batch_paths, criterion, batch_size, device,
                 torch.cuda.empty_cache()
 
     avg_loss = (total_loss / total_items) if total_items > 0 else float('nan')
-    f1 = compute_macro_f1(np.array(all_labels), np.array(all_preds))
-    return avg_loss, f1, total_items
+    avg_ce_loss = (total_ce_loss / total_items) if total_items > 0 else float('nan')
+    avg_con_loss = (total_con_loss / total_items) if total_items > 0 else float('nan')
+    f1 = compute_macro_f1(np.array(all_labels), np.array(all_preds)) if len(all_labels) > 0 else float('nan')
+    return avg_loss, avg_ce_loss, avg_con_loss, f1, total_items
 
 
 class EarlyStopping:
@@ -205,6 +233,7 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
                         use_scheduler=True,
                         scheduler_patience=10,
                         scheduler_factor=0.5,
+                        ce_weight=1.0,
                         contrastive_weight=0.5,
                         contrastive_temp=0.07):
     """
@@ -289,6 +318,8 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0.0
+        epoch_ce_loss = 0.0
+        epoch_con_loss = 0.0
         epoch_items = 0
 
         all_train_labels = []
@@ -304,23 +335,39 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
             for pyg_batch in loader:
                 pyg_batch = pyg_batch.to(device)
                 y = pyg_batch.y.view(-1).long()
+                bs = int(y.shape[0])
 
                 optimizer.zero_grad(set_to_none=True)
                 
+                has_classifier = hasattr(model, 'classifier')
                 embeddings = None
-                if hasattr(model, 'get_embedding'):
-                    embeddings = model.get_embedding(pyg_batch)
-                    logits = model.classifier(embeddings)
+                if has_classifier:
+                    if hasattr(model, 'get_embedding'):
+                        embeddings = model.get_embedding(pyg_batch)
+                        logits = model.classifier(embeddings)
+                    else:
+                        logits = model(pyg_batch)
                 else:
-                    logits = model(pyg_batch)
+                    embeddings = model.get_embedding(pyg_batch) if hasattr(model, 'get_embedding') else None
+                    logits = None
 
-                ce_loss = criterion(logits, y)
+                optimizer.zero_grad(set_to_none=True)
                 
+                loss = torch.tensor(0.0, device=device, requires_grad=True)
+                
+                if has_classifier and logits is not None and ce_weight > 0.0:
+                    ce_loss = criterion(logits, y)
+                    loss = loss + ce_weight * ce_loss
+                    epoch_ce_loss += ce_loss.item() * bs
+
                 if embeddings is not None and contrastive_weight > 0.0:
-                    con_loss = contrastive_criterion(embeddings, y)
-                    loss = ce_loss + contrastive_weight * con_loss
-                else:
-                    loss = ce_loss
+                    supcon_embeddings = model.projection_head(embeddings) if hasattr(model, 'projection_head') else embeddings
+                    con_loss = contrastive_criterion(supcon_embeddings, y)
+                    if loss.item() == 0.0:
+                        loss = contrastive_weight * con_loss
+                    else:
+                        loss = loss + contrastive_weight * con_loss
+                    epoch_con_loss += con_loss.item() * bs
 
                 loss.backward()
                 
@@ -329,42 +376,51 @@ def train_from_manifest(manifest_path, epochs=5, batch_size=4, lr=1e-4,
                 
                 optimizer.step()
 
-                preds = logits.detach().argmax(dim=1)
-
-                bs = int(y.shape[0])
                 epoch_loss += loss.item() * bs
                 epoch_items += bs
-                all_train_labels.extend(y.detach().cpu().numpy().tolist())
-                all_train_preds.extend(preds.cpu().numpy().tolist())
+                
+                if logits is not None:
+                    preds = logits.detach().argmax(dim=1)
+                    all_train_labels.extend(y.detach().cpu().numpy().tolist())
+                    all_train_preds.extend(preds.cpu().numpy().tolist())
 
             del loader
             del graphs
 
 
         avg_loss = (epoch_loss / epoch_items) if epoch_items > 0 else float('nan')
-        train_f1 = compute_macro_f1(
-            np.array(all_train_labels),
-            np.array(all_train_preds),
-        )
+        avg_ce_loss = (epoch_ce_loss / epoch_items) if epoch_items > 0 else float('nan')
+        avg_con_loss = (epoch_con_loss / epoch_items) if epoch_items > 0 else float('nan')
+        
+        train_f1 = compute_macro_f1(np.array(all_train_labels), np.array(all_train_preds)) if len(all_train_labels) > 0 else float('nan')
 
         val_loss = float('nan')
+        val_ce_loss = float('nan')
+        val_con_loss = float('nan')
         val_f1 = float('nan')
         val_items = 0
         if val_batch_paths:
-            val_loss, val_f1, val_items = evaluate_from_batch_paths(
+            val_loss, val_ce_loss, val_con_loss, val_f1, val_items = evaluate_from_batch_paths(
                 model=model,
                 batch_paths=val_batch_paths,
                 criterion=criterion,
                 batch_size=batch_size,
                 device=device,
-                val_ids=val_ids if filter_by_id else None
+                val_ids=val_ids if filter_by_id else None,
+                contrastive_criterion=contrastive_criterion,
+                contrastive_weight=contrastive_weight,
+                ce_weight=ce_weight
             )
 
-        logging.info(
-            f"Epoch {epoch}/{epochs} - "
-            f"train_loss: {avg_loss:.6f} - train_macroF1: {train_f1:.6f} - train_samples: {epoch_items} - "
-            f"val_loss: {val_loss:.6f} - val_macroF1: {val_f1:.6f} - val_samples: {val_items}"
-        )
+        has_classifier = hasattr(model, 'classifier')
+        log_str = f"Epoch {epoch}/{epochs} | "
+        if has_classifier:
+            log_str += f"Train [CE: {avg_ce_loss:.4f}, SupCon: {avg_con_loss:.4f}, F1: {train_f1:.4f}] | "
+            log_str += f"Val [CE: {val_ce_loss:.4f}, SupCon: {val_con_loss:.4f}, F1: {val_f1:.4f}]"
+        else:
+            log_str += f"Train [SupCon: {avg_con_loss:.4f}] | Val [SupCon: {val_con_loss:.4f}]"
+        
+        logging.info(log_str)
 
         if scheduler is not None:
             metric_for_scheduler = val_loss if not np.isnan(val_loss) else avg_loss
@@ -443,6 +499,7 @@ if __name__ == '__main__':
     parser.set_defaults(use_scheduler=True)
     parser.add_argument('--scheduler-patience', type=int, default=10, help='Patience for learning rate scheduler.')
     parser.add_argument('--scheduler-factor', type=float, default=0.5, help='Multiplicative factor of learning rate decay.')
+    parser.add_argument('--ce-weight', type=float, default=1.0, help='Weight of cross-entropy loss.')
     parser.add_argument('--contrastive-weight', type=float, default=0.5, help='Weight of supervised contrastive loss.')
     parser.add_argument('--contrastive-temp', type=float, default=0.07, help='Temperature parameter for contrastive learning.')
     parser.add_argument('--hidden-dim', type=int, default=256)
@@ -517,6 +574,7 @@ if __name__ == '__main__':
         use_scheduler=args.use_scheduler,
         scheduler_patience=args.scheduler_patience,
         scheduler_factor=args.scheduler_factor,
+        ce_weight=args.ce_weight,
         contrastive_weight=args.contrastive_weight,
         contrastive_temp=args.contrastive_temp,
     )

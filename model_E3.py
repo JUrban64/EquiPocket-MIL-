@@ -78,14 +78,12 @@ class GraphClassifierE3(nn.Module):
             num_gnn_layers=3,
             dropout=dropout
         )
-        
-        # Predikční hlava
-        self.classifier = nn.Sequential(
+        # Projekční hlava (pro SupCon loss) - odděluje reprezentaci pro ztrátu od reprezentace pro downstream task
+        self.projection_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes)
+            nn.Linear(hidden_dim, hidden_dim)
         )
 
     def get_embedding(self, batch):
@@ -97,7 +95,6 @@ class GraphClassifierE3(nn.Module):
         return z
 
     def forward(self, batch):
-        # 1. Extrakce embeddingu
+        # Nyní jsme čistý encoder, forward vrací embedding pro SupCon (po projekci)
         z = self.get_embedding(batch)
-        # 2. Klasifikace
-        return self.classifier(z)
+        return self.projection_head(z)

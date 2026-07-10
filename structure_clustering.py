@@ -58,7 +58,7 @@ def cluster_structures(target='both', test_limit=None):
             print("No PDBs found.")
             return None, None, None
         
-        json_path = os.path.join(script_dir, '..', 'SQBCP', 'Structure_based_Cofactor_predictor', 'binding_sites_by_protein.json')
+        json_path = os.path.join(script_dir, 'binding_sites_by_protein.json')
         try:
             with open(json_path, 'r') as f:
                 bs_data = json.load(f)

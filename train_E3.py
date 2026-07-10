@@ -20,19 +20,19 @@ if __name__ == '__main__':
         '--graph-manifest',
         default='gt_graph_batches/manifest.json',
     )
-    parser.add_argument('--epochs', type=int, default=5)
-    parser.add_argument('--batch-size', type=int, default=4)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight-decay', type=float, default=1e-4, help='L2 regularization weight decay.')
     parser.add_argument('--no-scheduler', action='store_false', dest='use_scheduler', help='Disable learning rate scheduler.')
     parser.set_defaults(use_scheduler=True)
     parser.add_argument('--scheduler-patience', type=int, default=10, help='Patience for learning rate scheduler.')
     parser.add_argument('--scheduler-factor', type=float, default=0.5, help='Multiplicative factor of learning rate decay.')
-    parser.add_argument('--contrastive-weight', type=float, default=0.5, help='Weight of supervised contrastive loss.')
+    parser.add_argument('--ce-weight', type=float, default=0.0, help='Weight of cross-entropy loss.')
+    parser.add_argument('--contrastive-weight', type=float, default=1.0, help='Weight of supervised contrastive loss.')
     parser.add_argument('--contrastive-temp', type=float, default=0.07, help='Temperature parameter for contrastive learning.')
     
-    # Výchozí dimenze snížena, protože E(3) Tensor producty spotřebují hodně VRAM paměti
-    parser.add_argument('--hidden-dim', type=int, default=64) 
+    parser.add_argument('--hidden-dim', type=int, default=128) 
     
     parser.add_argument('--num-heads', type=int, default=4)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -81,6 +81,7 @@ if __name__ == '__main__':
         use_scheduler=args.use_scheduler,
         scheduler_patience=args.scheduler_patience,
         scheduler_factor=args.scheduler_factor,
+        ce_weight=args.ce_weight,
         contrastive_weight=args.contrastive_weight,
         contrastive_temp=args.contrastive_temp,
     )

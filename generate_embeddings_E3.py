@@ -136,7 +136,7 @@ if __name__ == '__main__':
         help='Where to save the resulting dictionary of embeddings'
     )
     parser.add_argument('--batch-size', type=int, default=8)
-    parser.add_argument('--hidden-dim', type=int, default=64)
+    parser.add_argument('--hidden-dim', type=int, default=256)
     parser.add_argument('--num-heads', type=int, default=4)
     parser.add_argument('--num-classes', type=int, default=5)
     parser.add_argument('--device', default=None)
