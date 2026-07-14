@@ -30,7 +30,7 @@ def load_esm_pockets(manifest_path):
         
     pocket_list = []
     
-    for batch_file in tqdm(manifest['batch_files'], desc="Načítání grafů"):
+    for batch_file in tqdm(manifest['files'], desc="Načítání grafů"):
         full_path = os.path.join(base_dir, batch_file)
         if not os.path.exists(full_path):
             continue

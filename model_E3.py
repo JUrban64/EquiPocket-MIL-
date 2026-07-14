@@ -5,7 +5,7 @@ from egnn_pytorch import EGNN_Sparse
 
 class GNNBranchE3(nn.Module):
     # Snížen defaultní dropout na 0.1 (10 %)
-    def __init__(self, node_dim=1280, hidden_dim=64, num_gnn_layers=3, dropout=0.1):
+    def __init__(self, node_dim=1280, hidden_dim=256, num_gnn_layers=3, dropout=0.1):
         super().__init__()
         
         self.hidden_dim = hidden_dim

@@ -1,3 +1,4 @@
+from pathlib import Path
 import numpy as np
 from Bio.PDB import PDBParser, Selection
 from scipy.spatial.distance import cdist
@@ -6,7 +7,6 @@ import sys
 import glob
 import os
 import json
-
 
 # ============================================================
 # Známé kofaktory a jejich funkční skupiny
